@@ -1,6 +1,6 @@
 ---
 name: graphify
-description: any input (code, docs, papers, images) → knowledge graph → clustered communities → HTML + JSON + audit report
+description: "any input (code, docs, papers, images) - knowledge graph - clustered communities - HTML + JSON + audit report"
 trigger: /graphify
 ---
 
@@ -13,6 +13,10 @@ Turn any folder of files into a navigable knowledge graph with community detecti
 ```
 /graphify                                             # full pipeline on current directory → Obsidian vault
 /graphify <path>                                      # full pipeline on specific path
+/graphify --live                                      # start live MCP server + file watcher in current dir
+/graphify <path> --live                               # start live MCP server + file watcher on path
+/graphify <path> --live --terminal                    # live mode + browser at localhost:7477 (auto-reload)
+/graphify --clear live                                # stop server, wipe graph + inbox, start fresh (asks permission)
 /graphify <path> --mode deep                          # thorough extraction, richer INFERRED edges
 /graphify <path> --update                             # incremental - re-extract only new/changed files
 /graphify <path> --directed                            # build directed graph (preserves edge direction: source→target)
@@ -54,6 +58,10 @@ Use it for:
 - Your personal /raw folder (drop everything in, let it grow, query it)
 
 ## What You Must Do When Invoked
+
+**If `--clear live` flag combination is present**, skip all extraction steps and go directly to the **Clear Live** section below.
+
+**If `--live` flag is present** (without `--clear`), skip all extraction steps and go directly to the **Live Mode** section below.
 
 If no path was given, use `.` (current directory). Do not ask the user for a path.
 
@@ -299,8 +307,10 @@ confidence_score is REQUIRED on every edge - never omit it, never use 0.5 as a d
   Weak or speculative: 0.4-0.5. Most edges should be 0.6-0.9, not 0.5.
 - AMBIGUOUS edges: 0.1-0.3
 
+Node ID format: lowercase, only `[a-z0-9_]`, no dots or slashes. Format: `{stem}_{entity}` where stem is the filename without extension and entity is the symbol name, both normalized (lowercase, non-alphanumeric chars replaced with `_`). Example: `src/auth/session.py` + `ValidateToken` → `session_validatetoken`. This must match the ID the AST extractor generates so cross-references between code and semantic nodes connect correctly.
+
 Output exactly this JSON (no other text):
-{"nodes":[{"id":"filestem_entityname","label":"Human Readable Name","file_type":"code|document|paper|image","source_file":"relative/path","source_location":null,"source_url":null,"captured_at":null,"author":null,"contributor":null}],"edges":[{"source":"node_id","target":"node_id","relation":"calls|implements|references|cites|conceptually_related_to|shares_data_with|semantically_similar_to|rationale_for","confidence":"EXTRACTED|INFERRED|AMBIGUOUS","confidence_score":1.0,"source_file":"relative/path","source_location":null,"weight":1.0}],"hyperedges":[{"id":"snake_case_id","label":"Human Readable Label","nodes":["node_id1","node_id2","node_id3"],"relation":"participate_in|implement|form","confidence":"EXTRACTED|INFERRED","confidence_score":0.75,"source_file":"relative/path"}],"input_tokens":0,"output_tokens":0}
+{"nodes":[{"id":"session_validatetoken","label":"Human Readable Name","file_type":"code|document|paper|image","source_file":"relative/path","source_location":null,"source_url":null,"captured_at":null,"author":null,"contributor":null}],"edges":[{"source":"node_id","target":"node_id","relation":"calls|implements|references|cites|conceptually_related_to|shares_data_with|semantically_similar_to|rationale_for","confidence":"EXTRACTED|INFERRED|AMBIGUOUS","confidence_score":1.0,"source_file":"relative/path","source_location":null,"weight":1.0}],"hyperedges":[{"id":"snake_case_id","label":"Human Readable Label","nodes":["node_id1","node_id2","node_id3"],"relation":"participate_in|implement|form","confidence":"EXTRACTED|INFERRED","confidence_score":0.75,"source_file":"relative/path"}],"input_tokens":0,"output_tokens":0}
 ```
 
 **Step B3 - Collect, cache, and merge**
@@ -860,6 +870,17 @@ if deleted:
 # Merge: new nodes/edges into existing graph
 G_existing.update(G_new)
 print(f'Merged: {G_existing.number_of_nodes()} nodes, {G_existing.number_of_edges()} edges')
+
+# Write merged result back to .graphify_extract.json so Step 4 sees the full graph
+merged_out = {
+    'nodes': [{'id': n, **d} for n, d in G_existing.nodes(data=True)],
+    'edges': [{'source': u, 'target': v, **d} for u, v, d in G_existing.edges(data=True)],
+    'hyperedges': new_extraction.get('hyperedges', []),
+    'input_tokens': new_extraction.get('input_tokens', 0),
+    'output_tokens': new_extraction.get('output_tokens', 0),
+}
+Path('graphify-out/.graphify_extract.json').write_text(json.dumps(merged_out))
+print(f'[graphify update] Merged extraction written ({len(merged_out[\"nodes\"])} nodes, {len(merged_out[\"edges\"])} edges)')
 " 
 ```
 
@@ -1294,6 +1315,196 @@ This writes a `## graphify` section to the local `CLAUDE.md` that instructs Clau
 ```bash
 graphify claude uninstall  # remove the section
 ```
+
+---
+
+## For /graphify --live
+
+### Step 1 — Resolve the watch path
+
+If a dir argument was given (e.g. `/graphify /my/project --live`), use it as WATCH_PATH. Otherwise resolve the current working directory and use that as WATCH_PATH.
+
+### Step 2 — Find the running server's port (silently)
+
+Run this bash silently. It reads the port file the server writes on startup, then checks if that port is alive:
+
+```bash
+PORT_FILE="WATCH_PATH/graphify-out/.graphify_api_port"
+API_PORT=$(cat "$PORT_FILE" 2>/dev/null | tr -d '[:space:]')
+if [ -z "$API_PORT" ]; then API_PORT=7478; fi
+curl -s --max-time 2 "http://localhost:${API_PORT}/api/stats" 2>/dev/null
+echo "GRAPHIFY_PORT=${API_PORT}"
+```
+
+Do NOT show this output to the user. Extract `API_PORT` from the `GRAPHIFY_PORT=` line. Use that port for ALL subsequent curl calls in this session.
+
+### Step 3 — If server is NOT running, kill stale processes and start fresh
+
+If the curl in Step 2 returned empty stats, tell the user in plain English (no code blocks, no raw bash):
+
+> "I'll start the graphify live server watching `WATCH_PATH`. It will:
+> - Kill any stale graphify processes, archive the previous graph, and start fresh
+> - Create an `inbox/` folder at `WATCH_PATH/inbox/` where you can drop files
+> - Run silently in the background (logs go to /tmp/graphify-live.log)
+>
+> Should I go ahead?"
+
+Wait for confirmation. Once confirmed, execute silently:
+
+```bash
+pkill -f "graphify live" 2>/dev/null; sleep 1
+/usr/local/bin/python -m graphify live "WATCH_PATH" --api-port 7478 --debounce 0.6 </dev/null >> /tmp/graphify-live.log 2>&1 &
+sleep 5
+API_PORT=$(cat "WATCH_PATH/graphify-out/.graphify_api_port" 2>/dev/null | tr -d '[:space:]')
+if [ -z "$API_PORT" ]; then API_PORT=7478; fi
+echo "GRAPHIFY_PORT=${API_PORT}"
+curl -s --max-time 3 "http://localhost:${API_PORT}/api/stats"
+```
+
+Extract the actual `API_PORT` from `GRAPHIFY_PORT=` line. Use that port for all subsequent curls.
+
+If the server WAS already running (Step 2 returned data), skip Step 3 and use the port from Step 2.
+
+### Step 4 — Fetch status and show a clean summary (no raw JSON)
+
+Run silently using the API_PORT resolved in Step 2 or 3:
+
+```bash
+curl -s "http://localhost:API_PORT/api/stats" && curl -s "http://localhost:API_PORT/api/gods?top_n=8" && curl -s "http://localhost:API_PORT/api/sessions"
+```
+
+Parse the JSON internally. Show the user a clean summary — no raw JSON, no bash output:
+
+---
+**graphify live is running** — watching `WATCH_PATH`
+
+| | |
+|---|---|
+| Nodes | N |
+| Edges | N |
+| Communities | N |
+| Past sessions | N |
+
+**Inbox**: `WATCH_PATH/inbox/` — drop any file here and the graph updates within 0.6s
+
+**Live graph**: `http://localhost:7477/graph.html` — opens automatically in your browser, auto-reloads when inbox changes
+
+Supported formats: `.md` `.txt` `.py` `.ts` `.go` `.rs` `.java` `.swift` `.rb` `.json` `.yaml` `.pdf`
+
+---
+
+If graph is empty: "Graph is empty and ready. Drop a file into the inbox to get started."
+
+If nodes exist: list top god nodes by name and offer to trace the most interesting connection.
+
+### Step 5 — Answer graph questions (always silently, never show raw JSON)
+
+For every query, run the right curl internally and present results in plain English:
+
+- Search: `curl -s "http://localhost:API_PORT/api/query?q=QUESTION&mode=bfs&depth=3"`
+- Node detail: `curl -s "http://localhost:API_PORT/api/node?label=NAME"`
+- Neighbors: `curl -s "http://localhost:API_PORT/api/neighbors?label=NAME"`
+- Shortest path: `curl -s "http://localhost:API_PORT/api/path?source=A&target=B"`
+- List sessions: `curl -s "http://localhost:API_PORT/api/sessions"`
+- Restore session: `curl -s "http://localhost:API_PORT/api/sessions?load=FILENAME"`
+
+Always read the `result` field. Translate it into a plain-English answer for the user.
+
+### Step 6 — After inbox drop
+
+When the user says they dropped a file, wait 1 second then run silently:
+```bash
+curl -s "http://localhost:API_PORT/api/stats" && curl -s "http://localhost:API_PORT/api/gods?top_n=5"
+```
+Tell the user: "Graph updated — now N nodes, N edges. New concepts detected: X, Y, Z." No raw JSON.
+
+---
+
+### How the inbox works
+
+`inbox/` is created automatically inside `WATCH_PATH` when the server starts. Drop any file there:
+
+| File type | What happens |
+|---|---|
+| `.md`, `.txt`, `.rst` | Lightweight entity extraction (headings, bold terms, URLs, named phrases) — no LLM, instant |
+| `.py`, `.ts`, `.go`, `.rs`, ... | Full AST extraction — no LLM, instant |
+| `.pdf` | Text extracted via pypdf — no LLM, instant. Scanned/image-only PDFs need `--semantic` |
+| images | Requires `--semantic` flag for Claude API extraction |
+
+Each new session starts with a **fresh empty graph** and **fresh graph.html** — no old code graphs carried over. Previous graph is archived to `WATCH_PATH/graphify-out/history/`.
+
+---
+
+## For /graphify --clear live
+
+Stop the live server, wipe the graph and inbox, and start fresh. Works from **any directory** — the command resolves the correct path automatically.
+
+### Step 1 — Resolve WATCH_PATH
+
+If a dir argument was given (e.g. `/graphify /my/project --clear live`), use it as WATCH_PATH. Otherwise resolve the current working directory:
+
+```bash
+WATCH_PATH=$(pwd)
+echo "WATCH_PATH=${WATCH_PATH}"
+```
+
+### Step 2 — Ask permission (REQUIRED — never skip this)
+
+Tell the user in plain English, **before running any destructive commands**:
+
+> "This will:
+> - Stop the graphify live server watching `WATCH_PATH`
+> - Delete `WATCH_PATH/graphify-out/` (graph, HTML, report, cache, port file — everything)
+> - Delete `WATCH_PATH/inbox/` and all files inside it
+> - Start a fresh empty server on the same path
+>
+> **This cannot be undone.** Should I go ahead?"
+
+Wait for explicit confirmation ("yes", "go ahead", "do it", etc.). If the user says anything other than a clear yes, abort and tell them nothing was changed.
+
+### Step 3 — Stop the server (silently)
+
+If no server is running `pkill` will exit cleanly — note this to the user ("no server was running") but continue with the wipe and restart.
+
+```bash
+PORT_FILE="${WATCH_PATH}/graphify-out/.graphify_api_port"
+API_PORT=$(cat "$PORT_FILE" 2>/dev/null | tr -d '[:space:]')
+pkill -f "graphify live" 2>/dev/null
+pkill -f "graphify.live" 2>/dev/null
+sleep 1
+echo "Server stopped (was on port ${API_PORT:-unknown})"
+```
+
+### Step 4 — Wipe graph data and inbox
+
+```bash
+rm -rf "${WATCH_PATH}/graphify-out"
+rm -rf "${WATCH_PATH}/inbox"
+echo "Cleared graphify-out/ and inbox/"
+```
+
+### Step 5 — Start fresh server
+
+```bash
+/usr/local/bin/python -m graphify live "${WATCH_PATH}" --api-port 7478 --debounce 0.6 </dev/null >> /tmp/graphify-live.log 2>&1 &
+sleep 5
+API_PORT=$(cat "${WATCH_PATH}/graphify-out/.graphify_api_port" 2>/dev/null | tr -d '[:space:]')
+if [ -z "$API_PORT" ]; then API_PORT=7478; fi
+curl -s --max-time 3 "http://localhost:${API_PORT}/api/stats"
+echo "GRAPHIFY_PORT=${API_PORT}"
+```
+
+### Step 6 — Confirm to the user (no raw JSON)
+
+Tell the user in plain English:
+
+> "Done. Graph cleared and fresh server started watching `WATCH_PATH`.
+>
+> - **Inbox**: `WATCH_PATH/inbox/` — drop any file here to begin
+> - **Live graph**: `http://localhost:7477/graph.html`
+> - **Logs**: `/tmp/graphify-live.log`
+>
+> The graph is empty and ready."
 
 ---
 

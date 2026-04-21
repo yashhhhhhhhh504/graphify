@@ -8,7 +8,7 @@
 [![Sponsor](https://img.shields.io/badge/sponsor-safishamsi-ea4aaa?logo=github-sponsors)](https://github.com/sponsors/safishamsi)
 [![LinkedIn](https://img.shields.io/badge/LinkedIn-Safi%20Shamsi-0077B5?logo=linkedin)](https://www.linkedin.com/in/safi-shamsi)
 
-**An AI coding assistant skill.** Type `/graphify` in Claude Code, Codex, OpenCode, Cursor, Gemini CLI, GitHub Copilot CLI, Aider, OpenClaw, Factory Droid, Trae, Hermes, Kiro, or Google Antigravity - it reads your files, builds a knowledge graph, and gives you back structure you didn't know was there. Understand a codebase faster. Find the "why" behind architectural decisions.
+**An AI coding assistant skill.** Type `/graphify` in Claude Code, Codex, OpenCode, Cursor, Gemini CLI, GitHub Copilot CLI, VS Code Copilot Chat, Aider, OpenClaw, Factory Droid, Trae, Hermes, Kiro, or Google Antigravity - it reads your files, builds a knowledge graph, and gives you back structure you didn't know was there. Understand a codebase faster. Find the "why" behind architectural decisions.
 
 Fully multimodal. Drop in code, PDFs, markdown, screenshots, diagrams, whiteboard photos, images in other languages, or video and audio files - graphify extracts concepts and relationships from all of it and connects them into one graph. Videos are transcribed with Whisper using a domain-aware prompt derived from your corpus. 25 languages supported via tree-sitter AST (Python, JS, TS, Go, Rust, Java, C, C++, Ruby, C#, Kotlin, Scala, PHP, Swift, Lua, Zig, PowerShell, Elixir, Objective-C, Julia, Verilog, SystemVerilog, Vue, Svelte, Dart).
 
@@ -20,7 +20,7 @@ Fully multimodal. Drop in code, PDFs, markdown, screenshots, diagrams, whiteboar
 
 ```
 graphify-out/
-├── graph.html       interactive graph - click nodes, search, filter by community
+├── graph.html       interactive graph - open in any browser, click nodes, search, filter by community
 ├── GRAPH_REPORT.md  god nodes, surprising connections, suggested questions
 ├── graph.json       persistent graph - query weeks later without re-reading
 └── cache/           SHA256 cache - re-runs only process changed files
@@ -48,13 +48,15 @@ Every relationship is tagged `EXTRACTED` (found directly in source), `INFERRED` 
 
 ## Install
 
-**Requires:** Python 3.10+ and one of: [Claude Code](https://claude.ai/code), [Codex](https://openai.com/codex), [OpenCode](https://opencode.ai), [Cursor](https://cursor.com), [Gemini CLI](https://github.com/google-gemini/gemini-cli), [GitHub Copilot CLI](https://docs.github.com/en/copilot/how-tos/copilot-cli), [Aider](https://aider.chat), [OpenClaw](https://openclaw.ai), [Factory Droid](https://factory.ai), [Trae](https://trae.ai), [Kiro](https://kiro.dev), Hermes, or [Google Antigravity](https://antigravity.google)
+**Requires:** Python 3.10+ and one of: [Claude Code](https://claude.ai/code), [Codex](https://openai.com/codex), [OpenCode](https://opencode.ai), [Cursor](https://cursor.com), [Gemini CLI](https://github.com/google-gemini/gemini-cli), [GitHub Copilot CLI](https://docs.github.com/en/copilot/how-tos/copilot-cli), [VS Code Copilot Chat](https://code.visualstudio.com/docs/copilot/overview), [Aider](https://aider.chat), [OpenClaw](https://openclaw.ai), [Factory Droid](https://factory.ai), [Trae](https://trae.ai), [Kiro](https://kiro.dev), Hermes, or [Google Antigravity](https://antigravity.google)
 
 ```bash
 pip install graphifyy && graphify install
 ```
 
 > **Official package:** The PyPI package is named `graphifyy` (install with `pip install graphifyy`). Other packages named `graphify*` on PyPI are not affiliated with this project. The only official repository is [safishamsi/graphify](https://github.com/safishamsi/graphify). The CLI and skill command are still `graphify`.
+
+> **`graphify: command not found`?** On Windows, pip user scripts land in `%APPDATA%\Python\PythonXY\Scripts` — add that to your PATH or use `python -m graphify` instead. On macOS with pipx, run `pipx ensurepath` then restart your terminal.
 
 ### Platform support
 
@@ -65,6 +67,7 @@ pip install graphifyy && graphify install
 | Codex | `graphify install --platform codex` |
 | OpenCode | `graphify install --platform opencode` |
 | GitHub Copilot CLI | `graphify install --platform copilot` |
+| VS Code Copilot Chat | `graphify vscode install` |
 | Aider | `graphify install --platform aider` |
 | OpenClaw | `graphify install --platform claw` |
 | Factory Droid | `graphify install --platform droid` |
@@ -96,6 +99,7 @@ After building a graph, run this once in your project:
 | Codex | `graphify codex install` |
 | OpenCode | `graphify opencode install` |
 | GitHub Copilot CLI | `graphify copilot install` |
+| VS Code Copilot Chat | `graphify vscode install` |
 | Aider | `graphify aider install` |
 | OpenClaw | `graphify claw install` |
 | Factory Droid | `graphify droid install` |
@@ -125,6 +129,8 @@ After building a graph, run this once in your project:
 
 **GitHub Copilot CLI** copies the skill to `~/.copilot/skills/graphify/SKILL.md`. Run `graphify copilot install` to set it up.
 
+**VS Code Copilot Chat** installs a Python-only skill (works on Windows PowerShell and macOS/Linux alike) and writes `.github/copilot-instructions.md` in your project root — VS Code reads this automatically every session, making graph context always-on without any hook mechanism. Run `graphify vscode install`. Note: this configures the chat panel in VS Code, not the Copilot CLI terminal tool.
+
 Uninstall with the matching uninstall command (e.g. `graphify claude uninstall`).
 
 **Always-on vs explicit trigger — what's the difference?**
@@ -134,6 +140,24 @@ The always-on hook surfaces `GRAPH_REPORT.md` — a one-page summary of god node
 `/graphify query`, `/graphify path`, and `/graphify explain` go deeper: they traverse the raw `graph.json` hop by hop, trace exact paths between nodes, and surface edge-level detail (relation type, confidence score, source location). Use them when you want a specific question answered from the graph rather than a general orientation.
 
 Think of it this way: the always-on hook gives your assistant a map. The `/graphify` commands let it navigate the map precisely.
+
+### Team workflows
+
+`graphify-out/` is designed to be committed to git so every teammate starts with a fresh map.
+
+**Recommended `.gitignore` additions:**
+```
+# commit graph outputs, ignore the extraction cache
+graphify-out/cache/
+```
+
+**Shared setup:**
+1. One person runs `/graphify .` to build the initial graph and commits `graphify-out/`.
+2. Everyone else pulls — their assistant reads `GRAPH_REPORT.md` immediately with no extra steps.
+3. Install the post-commit hook (`graphify hook install`) so the graph rebuilds automatically after code changes — no LLM calls needed for code-only updates.
+4. For doc/paper changes, whoever edits the files runs `/graphify --update` to refresh semantic nodes.
+
+**Excluding paths** — create `.graphifyignore` in your project root (same syntax as `.gitignore`). Files matching those patterns are skipped during detection and extraction.
 
 ## Using `graph.json` with an LLM
 
@@ -280,11 +304,60 @@ graphify update ./src                        # re-extract code files, no LLM nee
 graphify cluster-only ./my-project           # rerun clustering on existing graph.json
 ```
 
+## Live mode (`--live`)
+
+Live mode starts a persistent file watcher and REST API so the graph updates automatically as you work — no need to re-run the full pipeline.
+
+```bash
+/graphify --live                    # watch current directory
+/graphify ./raw --live              # watch a specific folder
+/graphify --live --semantic         # enable Claude extraction for doc/PDF changes
+/graphify --clear live              # stop server, wipe graph + inbox, start fresh
+```
+
+### Inbox
+
+A special `inbox/` folder is created inside the watched directory. Drop any file there and the graph updates within 0.2 s.
+
+| What you drop | What happens |
+|---|---|
+| `.py .ts .go` etc. | AST extraction — instant, no Claude tokens |
+| `.md .txt .rst` | Lightweight regex extraction — instant, no Claude tokens |
+| `.pdf` | Text extracted via pypdf, then regex — no Claude tokens |
+
+### When Claude tokens are used
+
+Claude is **only** invoked when `--semantic` is active, and only for **non-code files that change directly in the watched directory** (outside the inbox). The inbox always uses fast local extraction regardless of `--semantic`.
+
+| Trigger | Claude tokens? |
+|---|---|
+| File dropped in `inbox/` | **No** — always lightweight regex / AST |
+| Code file changed in watched dir | **No** — AST extraction |
+| Doc / PDF changed in watched dir + `--semantic` | **Yes** — calls Claude via the `claude` CLI |
+| Doc / PDF changed in watched dir, no `--semantic` | No — writes a `needs_update` flag, logs a reminder |
+
+The semantic extractor uses the `claude` CLI (`claude -p ... --output-format json`) so it runs under **Claude Code's own auth** (OAuth/keychain) — no separate `ANTHROPIC_API_KEY` needed. If the `claude` binary is not on `$PATH`, it falls back to the Anthropic Python SDK with your `ANTHROPIC_API_KEY`.
+
+### Live API
+
+The server exposes a REST API on port 7478 (configurable):
+
+```bash
+curl localhost:7478/api/stats                      # graph summary
+curl "localhost:7478/api/query?q=attention&mode=bfs"  # BFS traversal
+curl "localhost:7478/api/node?label=DataLoader"    # node detail
+curl "localhost:7478/api/path?source=Auth&target=DB"  # shortest path
+curl "localhost:7478/api/gods?top_n=8"             # highest-degree nodes
+curl "localhost:7478/api/sessions"                 # past session archives
+```
+
+The live graph UI auto-reloads at `http://localhost:7477/graph.html`.
+
 Works with any mix of file types:
 
 | Type | Extensions | Extraction |
 |------|-----------|------------|
-| Code | `.py .ts .js .jsx .tsx .go .rs .java .c .cpp .rb .cs .kt .scala .php .swift .lua .zig .ps1 .ex .exs .m .mm .jl .vue .svelte` | AST via tree-sitter + call-graph (cross-file for all languages) + docstring/comment rationale |
+| Code | `.py .ts .js .jsx .tsx .mjs .go .rs .java .c .cpp .rb .cs .kt .scala .php .swift .lua .zig .ps1 .ex .exs .m .mm .jl .vue .svelte` | AST via tree-sitter + call-graph (cross-file for all languages) + docstring/comment rationale |
 | Docs | `.md .txt .rst` | Concepts + relationships + design rationale via Claude |
 | Office | `.docx .xlsx` | Converted to markdown then extracted via Claude (requires `pip install graphifyy[office]`) |
 | Papers | `.pdf` | Citation mining + concept extraction |

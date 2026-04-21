@@ -147,7 +147,8 @@ def _import_js(node, source: bytes, file_nid: str, stem: str, edges: list, str_p
                 break
             if raw.startswith("."):
                 # Relative import - resolve to full path so IDs match file node IDs
-                resolved = Path(str_path).parent / raw
+                # normpath removes ".." segments so the ID matches the target file's own node ID
+                resolved = Path(os.path.normpath(Path(str_path).parent / raw))
                 # TypeScript ESM: imports written as .js but actual file is .ts/.tsx
                 if resolved.suffix == ".js":
                     resolved = resolved.with_suffix(".ts")
@@ -1970,6 +1971,7 @@ def extract_go(path: Path) -> dict:
         label_to_nid[normalised.lower()] = n["id"]
 
     seen_call_pairs: set[tuple[str, str]] = set()
+    raw_calls: list[dict] = []
 
     def walk_calls(node, caller_nid: str) -> None:
         if node.type in ("function_declaration", "method_declaration"):
@@ -2000,6 +2002,13 @@ def extract_go(path: Path) -> dict:
                             "source_location": f"L{line}",
                             "weight": 1.0,
                         })
+                elif callee_name:
+                    raw_calls.append({
+                        "caller_nid": caller_nid,
+                        "callee": callee_name,
+                        "source_file": str_path,
+                        "source_location": f"L{node.start_point[0] + 1}",
+                    })
         for child in node.children:
             walk_calls(child, caller_nid)
 
@@ -2013,7 +2022,7 @@ def extract_go(path: Path) -> dict:
         if src in valid_ids and (tgt in valid_ids or edge["relation"] in ("imports", "imports_from")):
             clean_edges.append(edge)
 
-    return {"nodes": nodes, "edges": clean_edges}
+    return {"nodes": nodes, "edges": clean_edges, "raw_calls": raw_calls}
 
 
 # ── Rust extractor (custom walk) ──────────────────────────────────────────────
@@ -2135,6 +2144,7 @@ def extract_rust(path: Path) -> dict:
         label_to_nid[normalised.lower()] = n["id"]
 
     seen_call_pairs: set[tuple[str, str]] = set()
+    raw_calls: list[dict] = []
 
     def walk_calls(node, caller_nid: str) -> None:
         if node.type == "function_item":
@@ -2169,6 +2179,13 @@ def extract_rust(path: Path) -> dict:
                             "source_location": f"L{line}",
                             "weight": 1.0,
                         })
+                else:
+                    raw_calls.append({
+                        "caller_nid": caller_nid,
+                        "callee": callee_name,
+                        "source_file": str_path,
+                        "source_location": f"L{node.start_point[0] + 1}",
+                    })
         for child in node.children:
             walk_calls(child, caller_nid)
 
@@ -2182,7 +2199,7 @@ def extract_rust(path: Path) -> dict:
         if src in valid_ids and (tgt in valid_ids or edge["relation"] in ("imports", "imports_from")):
             clean_edges.append(edge)
 
-    return {"nodes": nodes, "edges": clean_edges}
+    return {"nodes": nodes, "edges": clean_edges, "raw_calls": raw_calls}
 
 
 # ── Zig ───────────────────────────────────────────────────────────────────────
@@ -2312,6 +2329,7 @@ def extract_zig(path: Path) -> dict:
     walk(root)
 
     seen_call_pairs: set[tuple[str, str]] = set()
+    raw_calls: list[dict] = []
 
     def walk_calls(node, caller_nid: str) -> None:
         if node.type == "function_declaration":
@@ -2329,6 +2347,13 @@ def extract_zig(path: Path) -> dict:
                         add_edge(caller_nid, tgt_nid, "calls",
                                  node.start_point[0] + 1,
                                  confidence="EXTRACTED", weight=1.0)
+                elif callee:
+                    raw_calls.append({
+                        "caller_nid": caller_nid,
+                        "callee": callee,
+                        "source_file": str_path,
+                        "source_location": f"L{node.start_point[0] + 1}",
+                    })
         for child in node.children:
             walk_calls(child, caller_nid)
 
@@ -2337,7 +2362,7 @@ def extract_zig(path: Path) -> dict:
 
     clean_edges = [e for e in edges if e["source"] in seen_ids and
                    (e["target"] in seen_ids or e["relation"] == "imports_from")]
-    return {"nodes": nodes, "edges": clean_edges}
+    return {"nodes": nodes, "edges": clean_edges, "raw_calls": raw_calls}
 
 
 # ── PowerShell ────────────────────────────────────────────────────────────────
@@ -2468,6 +2493,7 @@ def extract_powershell(path: Path) -> dict:
 
     label_to_nid = {n["label"].strip("()").lstrip(".").lower(): n["id"] for n in nodes}
     seen_call_pairs: set[tuple[str, str]] = set()
+    raw_calls: list[dict] = []
 
     def walk_calls(node, caller_nid: str) -> None:
         if node.type in ("function_statement", "class_statement"):
@@ -2485,6 +2511,13 @@ def extract_powershell(path: Path) -> dict:
                             add_edge(caller_nid, tgt_nid, "calls",
                                      node.start_point[0] + 1,
                                      confidence="EXTRACTED", weight=1.0)
+                    elif cmd_text:
+                        raw_calls.append({
+                            "caller_nid": caller_nid,
+                            "callee": cmd_text,
+                            "source_file": str_path,
+                            "source_location": f"L{node.start_point[0] + 1}",
+                        })
         for child in node.children:
             walk_calls(child, caller_nid)
 
@@ -2493,7 +2526,7 @@ def extract_powershell(path: Path) -> dict:
 
     clean_edges = [e for e in edges if e["source"] in seen_ids and
                    (e["target"] in seen_ids or e["relation"] == "imports_from")]
-    return {"nodes": nodes, "edges": clean_edges}
+    return {"nodes": nodes, "edges": clean_edges, "raw_calls": raw_calls}
 
 
 # ── Cross-file import resolution ──────────────────────────────────────────────
@@ -2956,6 +2989,7 @@ def extract_elixir(path: Path) -> dict:
         label_to_nid[normalised.lower()] = n["id"]
 
     seen_call_pairs: set[tuple[str, str]] = set()
+    raw_calls: list[dict] = []
     _SKIP_KEYWORDS = frozenset({
         "def", "defp", "defmodule", "defmacro", "defmacrop",
         "defstruct", "defprotocol", "defimpl", "defguard",
@@ -2995,6 +3029,13 @@ def extract_elixir(path: Path) -> dict:
                     seen_call_pairs.add(pair)
                     add_edge(caller_nid, tgt_nid, "calls",
                              node.start_point[0] + 1, confidence="EXTRACTED", weight=1.0)
+            else:
+                raw_calls.append({
+                    "caller_nid": caller_nid,
+                    "callee": callee_name,
+                    "source_file": str_path,
+                    "source_location": f"L{node.start_point[0] + 1}",
+                })
         for child in node.children:
             walk_calls(child, caller_nid)
 
@@ -3003,7 +3044,7 @@ def extract_elixir(path: Path) -> dict:
 
     clean_edges = [e for e in edges if e["source"] in seen_ids and
                    (e["target"] in seen_ids or e["relation"] == "imports")]
-    return {"nodes": nodes, "edges": clean_edges, "input_tokens": 0, "output_tokens": 0}
+    return {"nodes": nodes, "edges": clean_edges, "raw_calls": raw_calls, "input_tokens": 0, "output_tokens": 0}
 
 
 # ── Main extract and collect_files ────────────────────────────────────────────
@@ -3063,6 +3104,7 @@ def extract(paths: list[Path], cache_root: Path | None = None) -> dict:
         ".py": extract_python,
         ".js": extract_js,
         ".jsx": extract_js,
+        ".mjs": extract_js,
         ".ts": extract_js,
         ".tsx": extract_js,
         ".go": extract_go,

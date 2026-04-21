@@ -89,24 +89,71 @@ def _dfs(G: nx.Graph, start_nodes: list[str], depth: int) -> tuple[set[str], lis
     return visited, edges_seen
 
 
-def _subgraph_to_text(G: nx.Graph, nodes: set[str], edges: list[tuple], token_budget: int = 2000) -> str:
-    """Render subgraph as text, cutting at token_budget (approx 3 chars/token)."""
-    char_budget = token_budget * 3
+def _subgraph_to_text(G: nx.Graph, nodes: set[str], edges: list[tuple], token_budget: int = 500) -> str:
+    """Render subgraph as a compact summary — top nodes by degree + key edges only.
+
+    Uses ~500 tokens by default (was 2000). Dumps only the top 15 most-connected
+    nodes and the edges between them, not every traversed node. This keeps
+    Claude's context window usage minimal while preserving the most relevant signal.
+    """
+    import re as _re
+
+    def _quality(label: str, deg: int) -> bool:
+        if not label or len(label) < 4:
+            return False
+        if _re.match(r"^[\d.:,\-/]+$", label):
+            return False
+        if _re.match(r"^Header level \d+$", label, _re.IGNORECASE):
+            return False
+        if label[0] in "#$>!|%@":
+            return False
+        _git = ("On branch ", "Untracked files:", "Initial commit",
+                "modified:", "deleted:", "new file:", "diff --git")
+        if any(label.startswith(p) for p in _git):
+            return False
+        if deg < 2 and len(label) < 6:
+            return False
+        return True
+
+    # Keep only top-N nodes by degree (most connected = most relevant)
+    top_n = max(15, token_budget // 30)
+    all_ranked = sorted(nodes, key=lambda n: G.degree(n), reverse=True)
+    ranked = [n for n in all_ranked
+              if _quality(sanitize_label(G.nodes[n].get("label", n)), G.degree(n))][:top_n]
+    ranked_set = set(ranked)
+
     lines = []
-    for nid in sorted(nodes, key=lambda n: G.degree(n), reverse=True):
-        d = G.nodes[nid]
-        line = f"NODE {sanitize_label(d.get('label', nid))} [src={d.get('source_file', '')} loc={d.get('source_location', '')} community={d.get('community', '')}]"
-        lines.append(line)
+    for nid in ranked:
+        label = sanitize_label(G.nodes[nid].get("label", nid))
+        comm = G.nodes[nid].get("community", "")
+        deg = G.degree(nid)
+        lines.append(f"• {label}  (degree={deg}, community={comm})")
+
+    # Only edges between top nodes
+    key_edges = []
+    seen_edges: set[tuple] = set()
     for u, v in edges:
-        if u in nodes and v in nodes:
-            raw = G[u][v]
-            d = next(iter(raw.values()), {}) if isinstance(G, (nx.MultiGraph, nx.MultiDiGraph)) else raw
-            line = f"EDGE {sanitize_label(G.nodes[u].get('label', u))} --{d.get('relation', '')} [{d.get('confidence', '')}]--> {sanitize_label(G.nodes[v].get('label', v))}"
-            lines.append(line)
-    output = "\n".join(lines)
-    if len(output) > char_budget:
-        output = output[:char_budget] + f"\n... (truncated to ~{token_budget} token budget)"
-    return output
+        if u in ranked_set and v in ranked_set:
+            pair = (min(u, v), max(u, v))
+            if pair not in seen_edges:
+                seen_edges.add(pair)
+                raw = G[u][v]
+                d = next(iter(raw.values()), {}) if isinstance(G, (nx.MultiGraph, nx.MultiDiGraph)) else raw
+                rel = d.get("relation", "related")
+                conf = d.get("confidence", "")
+                lu = sanitize_label(G.nodes[u].get("label", u))
+                lv = sanitize_label(G.nodes[v].get("label", v))
+                key_edges.append(f"  {lu} --{rel} [{conf}]--> {lv}")
+
+    if key_edges:
+        lines.append(f"\nKey relationships ({len(key_edges)} shown):")
+        lines.extend(key_edges[:20])
+
+    omitted = len(nodes) - len(ranked)
+    if omitted > 0:
+        lines.append(f"\n({omitted} lower-relevance nodes omitted to save tokens)")
+
+    return "\n".join(lines)
 
 
 def _find_node(G: nx.Graph, label: str) -> list[str]:
@@ -295,7 +342,7 @@ def serve(graph_path: str = "graphify-out/graph.json") -> None:
         from .analyze import god_nodes as _god_nodes
         nodes = _god_nodes(G, top_n=int(arguments.get("top_n", 10)))
         lines = ["God nodes (most connected):"]
-        lines += [f"  {i}. {n['label']} - {n['edges']} edges" for i, n in enumerate(nodes, 1)]
+        lines += [f"  {i}. {n['label']} - {n['degree']} edges" for i, n in enumerate(nodes, 1)]
         return "\n".join(lines)
 
     def _tool_graph_stats(_: dict) -> str:
